@@ -1,0 +1,15 @@
+names:
+- ball
+- goalkeeper
+- player
+- referee
+nc: 4
+roboflow:
+  license: CC BY 4.0
+  project: football-players-detection-2frwp-iorio
+  url: https://universe.roboflow.com/abhi-nosgh/football-players-detection-2frwp-iorio/dataset/1
+  version: 1
+  workspace: abhi-nosgh
+test: ../test/images
+train: Football-Players-Detection-1/train/images
+val: Football-Players-Detection-1/valid/images
