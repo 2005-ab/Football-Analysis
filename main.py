@@ -1,13 +1,11 @@
-from utils import read_video, save_video
-from trackers import Tracker
+from ultralytics import YOLO
+from utils.video_utils import save_video, read_video
 
-def main():
-    video_frames = read_video(r'clips\city_build_up\city_clip06.mp4')  # ✅ raw string to fix \c
+model = YOLO('models/best3.pt')
 
-    tracker=Tracker('models/best.pt')
+results=model.predict('clips\spurs_build_up\spurs_clip03.mp4',save=True)
+print(results[0])
 
-    tracks=tracker.get_object_tracks(video_frames)
-    save_video(video_frames, 'output_videos/output_video.avi')         # ✅ valid path with extension
-
-if __name__ == '__main__':
-    main()
+for box in results[0].boxes:
+    print(box)
+    

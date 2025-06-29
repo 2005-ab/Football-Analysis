@@ -1,42 +1,37 @@
-from ultralytics import YOLO
-import supervision as sv
+# tracker.py
+import torch
+import cv2
+import os
+from my_utils import get_center_of_bbox, get_bbox_width
 
 class Tracker:
     def __init__(self, model_path):
-        self.model = YOLO(model_path)
-        self.tracker = sv.ByteTrack()
+        # ✅ Force reload to avoid 'grid' errors from old cached models
+        self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True)
 
-    def detect_frames(self, frames):
-        batch_size = 20
-        detections = []
-        for i in range(0, len(frames), batch_size):
-            detections_batch = self.model.predict(frames[i:i+batch_size], conf=0.1)
-            detections += detections_batch
-        return detections
+    def detect(self, frame):
+        results = self.model(frame)
+        return results
 
-    def get_object_tracks(self, frames):
-        detections = self.detect_frames(frames)
+    def draw_boxes(self, frame, results):
+        labels, cords = results.xyxyn[0][:, -1], results.xyxyn[0][:, :-1]
+        n = len(labels)
+        x_shape, y_shape = frame.shape[1], frame.shape[0]
 
-        for frame_num, detection in enumerate(detections):
-            cls_names = detection.names
-            cls_names_inv = {v: k for k, v in cls_names.items()}
+        for i in range(n):
+            row = cords[i]
+            if row[4] >= 0.2:
+                x1, y1, x2, y2 = int(row[0]*x_shape), int(row[1]*y_shape), int(row[2]*x_shape), int(row[3]*y_shape)
+                cls = int(labels[i])
+                label = self.model.names[cls]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36,255,12), 2)
+        return frame
 
-            # Convert to supervision Detection format
-            detection_supervision = sv.Detections.from_ultralytics(detection)
-
-            # ✅ Fix class label mismatches here (no retraining needed)
-            class_fix_map = {
-                'ball': 'player',
-                'player': 'ball',
-                'goalkeeper': 'referee',
-                'referee': 'goalkeeper'
-            }
-
-            for i, class_id in enumerate(detection_supervision.class_id):
-                original_name = cls_names[class_id]
-                if original_name in class_fix_map:
-                    corrected_name = class_fix_map[original_name]
-                    detection_supervision.class_id[i] = cls_names_inv[corrected_name]
-
-            print(f"Frame {frame_num}:")
-            print(detection_supervision)
+    def process_video(self, frames):
+        processed_frames = []
+        for frame in frames:
+            results = self.detect(frame)
+            annotated = self.draw_boxes(frame, results)
+            processed_frames.append(annotated)
+        return processed_frames
