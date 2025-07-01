@@ -1,9 +1,12 @@
 import os
+import cv2
+import pickle
+import torch
+import numpy as np
 from ultralytics import YOLO
 import supervision as sv
-import pickle
-import cv2
-import numpy as np  # 🔺 Needed for triangle drawing
+from supervision.detection.core import Detections
+
 
 class Tracker:
     def __init__(self, model_path):
@@ -13,7 +16,7 @@ class Tracker:
     def detect_frames(self, frames, conf=0.2, batch_size=16):
         dets = []
         for i in range(0, len(frames), batch_size):
-            dets_batch = self.model.predict(frames[i:i+batch_size], conf=conf)
+            dets_batch = self.model.predict(frames[i:i + batch_size], conf=conf)
             dets.extend(dets_batch)
         return dets
 
@@ -22,39 +25,70 @@ class Tracker:
             return pickle.load(open(stub_path, 'rb'))
 
         dets = self.detect_frames(frames)
-        tracks = {"players": [], "ball": [], "referees": []}
+        tracks = {"players": [], "ball": []}
 
         for idx, det in enumerate(dets):
+            boxes = det.boxes
             names = det.names
             inv = {v: k for k, v in names.items()}
-            sup = sv.Detections.from_ultralytics(det)
 
-            # map goalkeepers → players
-            for i, cid in enumerate(sup.class_id):
-                if names[cid] == "goalkeeper":
-                    sup.class_id[i] = inv["player"]
+            if boxes is None or len(boxes) == 0:
+                # No detections in this frame
+                tracks["players"].append({})
+                tracks["ball"].append({})
+                continue
 
+            # Filter out referees and keep only players and ball
+            valid_indices = []
+            for i, box in enumerate(boxes):
+                cls_name = names[int(box.cls)]
+                if cls_name in ["player", "goalkeeper", "ball"]:
+                    valid_indices.append(i)
+            
+            if not valid_indices:
+                tracks["players"].append({})
+                tracks["ball"].append({})
+                continue
+
+            # Keep only valid detections
+            boxes = boxes[valid_indices]
+
+            # Fix goalkeeper class IDs → player
+            for box in boxes:
+                if names[int(box.cls)] == "goalkeeper":
+                    box.cls = torch.tensor(inv["player"]).to(box.cls.device)
+
+            # Parse into supervision format
+            xyxy = boxes.xyxy.cpu().numpy()
+            conf = boxes.conf.cpu().numpy()
+            cls = boxes.cls.cpu().numpy().astype(int)
+
+            sup = Detections(
+                xyxy=xyxy,
+                confidence=conf,
+                class_id=cls
+            )
+
+            # Track objects
             with_tracks = self.tracker.update_with_detections(sup)
+
+            # Initialize frame
             tracks["players"].append({})
             tracks["ball"].append({})
-            tracks["referees"].append({})
 
-            for b in with_tracks:
-                bbox = b[0].tolist()
-                cid = b[3]
-                tid = b[4]
-                cls = names[cid]
+            for det in with_tracks:
+                bbox = det[0].tolist()
+                class_id = int(det[3])
+                track_id = int(det[4])
+                cls = names[class_id]
+
                 if cls == "player":
-                    tracks["players"][idx][tid] = {"bbox": bbox}
-                elif cls == "referee":
-                    tracks["referees"][idx][tid] = {"bbox": bbox}
+                    tracks["players"][idx][track_id] = {"bbox": bbox}
 
-            # ball (id=1)
-            for b in sup:
-                bbox = b[0].tolist()
-                cid = b[3]
-                if names[cid] == "ball":
-                    tracks["ball"][idx][1] = {"bbox": bbox}
+            # Ball → Not tracked, only detect
+            for box, class_id in zip(xyxy, cls):
+                if names[class_id] == "ball":
+                    tracks["ball"][idx][1] = {"bbox": box.tolist()}
 
         if stub_path:
             pickle.dump(tracks, open(stub_path, 'wb'))
@@ -80,7 +114,6 @@ class Tracker:
                         cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 2)
         return frame
 
-    # 🔺 NEW: Ball triangle drawing
     def draw_triangle(self, frame, bbox, color=(0, 255, 255)):
         x1, y1, x2, y2 = bbox
         xc = int((x1 + x2) / 2)
@@ -88,9 +121,9 @@ class Tracker:
         w = int((x2 - x1) * 0.6)
         h = int((x2 - x1) * 0.6)
         points = np.array([
-            [xc, yt + h],         # bottom point (triangle tip)
-            [xc - w // 2, yt],    # top-left
-            [xc + w // 2, yt]     # top-right
+            [xc, yt + h],
+            [xc - w // 2, yt],
+            [xc + w // 2, yt]
         ])
         cv2.drawContours(frame, [points], 0, color, cv2.FILLED)
         return frame
@@ -100,13 +133,12 @@ class Tracker:
         for i, frame in enumerate(frames):
             img = frame.copy()
 
-            # Draw players with ellipse and ID
             for tid, info in tracks["players"][i].items():
-                img = self.draw_ellipse(img, info["bbox"], track_id=tid)
+                color = tuple(int(x) for x in info.get("jersey_color", (0, 0, 255)))
+                img = self.draw_ellipse(img, info["bbox"], track_id=tid, color=color)
 
-            # 🔺 Draw the ball with triangle
             for _, info in tracks["ball"][i].items():
-                img = self.draw_triangle(img, info["bbox"], color=(0, 255, 255))  # yellow
+                img = self.draw_triangle(img, info["bbox"], color=(0, 255, 255))
 
             out.append(img)
-        return out
+        return out 
