@@ -27,91 +27,91 @@ class Tracker:
         dets = self.detect_frames(frames)
         tracks = {"players": [], "ball": []}
 
+        prev_player_tracks = {}
+        prev_ball_track = {}
+
         for idx, det in enumerate(dets):
             boxes = det.boxes
             names = det.names
             inv = {v: k for k, v in names.items()}
 
             if boxes is None or len(boxes) == 0:
-                # No detections in this frame
-                tracks["players"].append({})
-                tracks["ball"].append({})
+                tracks["players"].append(prev_player_tracks.copy())
+                tracks["ball"].append(prev_ball_track.copy())
                 continue
 
-            # Filter out referees and keep only players and ball
             valid_indices = []
             for i, box in enumerate(boxes):
-                cls_name = names[int(box.cls)]
+                cls_id = box.cls
+                cls_id_int = inv.get(cls_id, -1) if isinstance(cls_id, str) else int(cls_id)
+                cls_name = names[cls_id_int]
                 if cls_name in ["player", "goalkeeper", "ball"]:
                     valid_indices.append(i)
-            
+
             if not valid_indices:
-                tracks["players"].append({})
-                tracks["ball"].append({})
+                tracks["players"].append(prev_player_tracks.copy())
+                tracks["ball"].append(prev_ball_track.copy())
                 continue
 
-            # Keep only valid detections
             boxes = boxes[valid_indices]
 
-            # Fix goalkeeper class IDs → player
-            for box in boxes:
-                if names[int(box.cls)] == "goalkeeper":
-                    box.cls = torch.tensor(inv["player"]).to(box.cls.device)
+            # Convert goalkeeper → player
+            cls_tensor = boxes.cls
+            for i in range(len(cls_tensor)):
+                cls_id = cls_tensor[i]
+                cls_id_val = int(cls_id.item()) if isinstance(cls_id, torch.Tensor) else int(cls_id)
+                if names[cls_id_val] == "goalkeeper":
+                    cls_tensor[i] = inv["player"]
 
-            # Parse into supervision format
             xyxy = boxes.xyxy.cpu().numpy()
             conf = boxes.conf.cpu().numpy()
-            cls = boxes.cls.cpu().numpy().astype(int)
+            cls = boxes.cls.cpu().numpy()
 
-            sup = Detections(
-                xyxy=xyxy,
-                confidence=conf,
-                class_id=cls
-            )
+            cls_fixed = [inv.get(c, -1) if isinstance(c, str) else int(c) for c in cls]
+            cls = np.array(cls_fixed)
 
-            # Track objects
+            sup = Detections(xyxy=xyxy, confidence=conf, class_id=cls)
             with_tracks = self.tracker.update_with_detections(sup)
 
-            # Initialize frame
             tracks["players"].append({})
             tracks["ball"].append({})
+            current_players = {}
+            ball_found = False
 
             for det in with_tracks:
                 bbox = det[0].tolist()
-                class_id = int(det[3])
+                class_id = det[3]
                 track_id = int(det[4])
-                cls = names[class_id]
+                class_id_int = inv.get(class_id, -1) if isinstance(class_id, str) else int(class_id)
+                cls = names[class_id_int]
+                if cls in ["player", "goalkeeper"]:
+                    current_players[track_id] = {"bbox": bbox}
+                elif cls == "ball":
+                    tracks["ball"][idx][1] = {"bbox": bbox}
+                    ball_found = True
 
-                if cls == "player":
-                    tracks["players"][idx][track_id] = {"bbox": bbox}
+            if not current_players and prev_player_tracks:
+                current_players = prev_player_tracks.copy()
+            if not ball_found and 1 in prev_ball_track:
+                tracks["ball"][idx][1] = prev_ball_track[1]
 
-            # Ball → Not tracked, only detect
-            for box, class_id in zip(xyxy, cls):
-                if names[class_id] == "ball":
-                    tracks["ball"][idx][1] = {"bbox": box.tolist()}
+            tracks["players"][idx] = current_players
+            prev_player_tracks = current_players.copy()
+            if 1 in tracks["ball"][idx]:
+                prev_ball_track = {1: tracks["ball"][idx][1]}
 
         if stub_path:
             pickle.dump(tracks, open(stub_path, 'wb'))
         return tracks
 
-    def draw_ellipse(self, frame, bbox, track_id=None, color=(255, 255, 255), thickness=4):
+    def draw_ellipse(self, frame, bbox, color=(255, 255, 255), thickness=4):
         x1, y1, x2, y2 = bbox
         xc = int((x1 + x2) / 2)
         yb = int(y2)
         W = int((x2 - x1) * 0.8)
         H = int(W * 0.5)
         yc = yb - H // 2 - 10
-
         cv2.ellipse(frame, (xc, yc), (W, H), 0, -30, 235, color, thickness, cv2.LINE_AA)
-        if track_id is not None:
-            rw, rh = 40, 28
-            rx1 = xc - rw // 2
-            ry1 = yc + H // 2 + 6
-            cv2.rectangle(frame, (rx1, ry1), (rx1 + rw, ry1 + rh), color, cv2.FILLED)
-            scale = 0.8 if track_id < 100 else 0.6
-            tx = rx1 + (8 if track_id < 100 else 4)
-            cv2.putText(frame, str(track_id), (tx, ry1 + rh - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 2)
         return frame
 
     def draw_triangle(self, frame, bbox, color=(0, 255, 255)):
@@ -133,12 +133,12 @@ class Tracker:
         for i, frame in enumerate(frames):
             img = frame.copy()
 
-            for tid, info in tracks["players"][i].items():
+            for _, info in tracks["players"][i].items():
                 color = tuple(int(x) for x in info.get("jersey_color", (0, 0, 255)))
-                img = self.draw_ellipse(img, info["bbox"], track_id=tid, color=color)
+                img = self.draw_ellipse(img, info["bbox"], color=color)
 
             for _, info in tracks["ball"][i].items():
                 img = self.draw_triangle(img, info["bbox"], color=(0, 255, 255))
 
             out.append(img)
-        return out 
+        return out
