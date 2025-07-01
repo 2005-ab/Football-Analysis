@@ -3,6 +3,9 @@ from team_assigner.team_assigner import TeamAssigner
 import numpy as np
 import cv2
 import os
+import open_clip
+import torch
+from PIL import Image
 
 
 def read_video(video_path):
@@ -48,6 +51,67 @@ def estimate_possession(tracks):
         possession_per_frame.append(possession_team)
         last_possession = possession_team
     return possession_per_frame
+
+
+def extract_clip_embeddings(frames, tracks):
+    model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')
+    model.eval()
+    all_embeddings = []
+    for f_idx, player_track in enumerate(tracks['players']):
+        frame = frames[f_idx]
+        for _, info in player_track.items():
+            x1, y1, x2, y2 = map(int, info['bbox'])
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
+                continue
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(crop_rgb)
+            img_tensor = preprocess(pil_img).unsqueeze(0)  # Add batch dim
+            with torch.no_grad():
+                emb = model.encode_image(img_tensor).cpu().numpy().flatten()
+            all_embeddings.append(emb)
+    all_embeddings = np.array(all_embeddings)
+    print(f"Extracted CLIP embeddings shape: {all_embeddings.shape}")
+    return all_embeddings
+
+
+def select_pitch_landmarks(frame):
+    print("Please click the 4 pitch corners in the following order: top-left, top-right, bottom-right, bottom-left.")
+    points = []
+    clone = frame.copy()
+    def click_event(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            points.append((x, y))
+            cv2.circle(clone, (x, y), 5, (0, 255, 0), -1)
+            cv2.imshow("Select Corners", clone)
+    cv2.imshow("Select Corners", clone)
+    cv2.setMouseCallback("Select Corners", click_event)
+    while len(points) < 4:
+        cv2.waitKey(1)
+    cv2.destroyWindow("Select Corners")
+    return np.array(points, dtype=np.float32)
+
+
+def compute_homography(image_points, pitch_size=(105, 68)):
+    # Standard football pitch size in meters (FIFA): 105x68
+    pitch_points = np.array([
+        [0, 0],
+        [pitch_size[0], 0],
+        [pitch_size[0], pitch_size[1]],
+        [0, pitch_size[1]]
+    ], dtype=np.float32)
+    H, _ = cv2.findHomography(image_points, pitch_points)
+    return H
+
+
+def map_to_pitch(bbox, H):
+    # bbox: [x1, y1, x2, y2] -> use center
+    xc = (bbox[0] + bbox[2]) / 2
+    yc = (bbox[1] + bbox[3]) / 2
+    pt = np.array([[xc, yc]], dtype=np.float32)
+    pt = np.array([pt])
+    pitch_pt = cv2.perspectiveTransform(pt, H)[0][0]
+    return pitch_pt
 
 
 if __name__ == "__main__":
@@ -109,3 +173,29 @@ if __name__ == "__main__":
 
     for idx, team in enumerate(possession):
         print(f"Frame {idx}: Team in possession: Team {team if team else 'Unknown'}")
+
+    # Extract CLIP embeddings for all player crops
+    extract_clip_embeddings(frames, tracks)
+
+    # --- NEW: Pitch mapping ---
+    # Hardcoded pitch corners for your video (update these for your video as needed)
+    image_points = np.array([
+        [100, 50],   # top-left
+        [1200, 60],  # top-right
+        [1180, 700], # bottom-right
+        [90, 690]    # bottom-left
+    ], dtype=np.float32)
+    H = compute_homography(image_points)
+    print("Homography matrix computed.")
+    # Map all player and ball positions to pitch coordinates
+    for f_idx, (players, ball, team) in enumerate(zip(tracks['players'], tracks['ball'], possession)):
+        player_pitch_coords = []
+        for _, info in players.items():
+            pitch_pt = map_to_pitch(info['bbox'], H)
+            player_pitch_coords.append((pitch_pt, info['team']))
+        ball_pitch_coord = None
+        if ball and 1 in ball:
+            ball_pitch_coord = map_to_pitch(ball[1]['bbox'], H)
+        print(f"Frame {f_idx}: Team in possession: {team if team else 'Unknown'}")
+        print(f"  Player pitch coords: {player_pitch_coords}")
+        print(f"  Ball pitch coord: {ball_pitch_coord}")
