@@ -3,36 +3,25 @@ import numpy as np
 import cv2
 import os
 from tqdm import tqdm
+import glob
 
-
-def read_video(video_path, max_frames=None):
-    """Read video with optional frame limit for testing"""
-    cap = cv2.VideoCapture(video_path)
+def load_extracted_frames(frames_dir):
+    """Load extracted frames from directory"""
+    frame_files = sorted(glob.glob(os.path.join(frames_dir, "*.jpg")))
     frames = []
-    frame_count = 0
     
-    print(f"🔄 Loading video: {video_path}")
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    if max_frames:
-        total_frames = min(total_frames, max_frames)
-        print(f"📹 Processing first {max_frames} frames for testing")
-    
-    with tqdm(total=total_frames, desc="Loading frames") as pbar:
-        while True:
-            ret, frame = cap.read()
-            if not ret or (max_frames and frame_count >= max_frames):
-                break
-            frames.append(frame)
-            frame_count += 1
+    print(f"🔄 Loading {len(frame_files)} extracted frames from {frames_dir}")
+    with tqdm(total=len(frame_files), desc="Loading frames") as pbar:
+        for frame_file in frame_files:
+            frame = cv2.imread(frame_file)
+            if frame is not None:
+                frames.append(frame)
             pbar.update(1)
     
-    cap.release()
     print(f"✅ Loaded {len(frames)} frames")
     return frames
 
-
-def save_video(frames, output_path, fps=24):
+def save_video(frames, output_path, fps=10):
     if len(frames) == 0:
         print("❌ No frames to save!")
         return
@@ -49,29 +38,29 @@ def save_video(frames, output_path, fps=24):
     out.release()
     print(f"✅ Video saved successfully!")
 
-
 if __name__ == "__main__":
-    video_path = "clips/spurs_build_up/spurs_clip04.mp4"
+    # Configuration
+    frames_dir = "extracted_frames"
     model_path = "models/best4.pt"
-    output_path = "output_videos/team_tracking.avi"
-    cache_path = None
+    output_path = "output_videos/random_frames_tracking.avi"
     
-    # For testing, limit frames to first 100
-    MAX_FRAMES = 100  # Set to None for full video processing
-
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    print("🚀 Starting team-based tracking analysis...")
+    print("🚀 Starting team tracking analysis on random frames...")
     print("="*60)
     
-    # Load video with frame limit for testing
-    frames = read_video(video_path, max_frames=MAX_FRAMES)
+    # Load extracted frames
+    frames = load_extracted_frames(frames_dir)
+    
+    if not frames:
+        print("❌ No frames found! Please run extract_random_frames.py first.")
+        exit(1)
 
     print("\n🔄 Initializing team tracker...")
     tracker = Tracker(model_path)
     
     print("🔄 Running team-based object tracking...")
-    tracks = tracker.get_object_tracks(frames, stub_path=cache_path)
+    tracks = tracker.get_object_tracks(frames, stub_path=None)
 
     print("\n🔄 Drawing team tracking annotations...")
     annotated = tracker.draw_annotations(frames, tracks)
@@ -86,9 +75,9 @@ if __name__ == "__main__":
     print(quality_report)
     
     # Show sample team tracking data
-    print("\n📊 SAMPLE TEAM TRACKING DATA (First 5 frames):")
+    print("\n📊 SAMPLE TEAM TRACKING DATA (First 10 frames):")
     print("-" * 50)
-    for i in range(min(5, len(tracks['team1_players']))):
+    for i in range(min(10, len(tracks['team1_players']))):
         team1_count = len(tracks['team1_players'][i])
         team2_count = len(tracks['team2_players'][i])
         ball_count = len(tracks['ball'][i]) if tracks['ball'][i] else 0
@@ -103,10 +92,9 @@ if __name__ == "__main__":
             team2_ratio = team2_count / total_players * 100
             print(f"  Team balance: Team 1 ({team1_ratio:.1f}%) vs Team 2 ({team2_ratio:.1f}%)")
 
-    print("\n🎯 TEAM TRACKING ANALYSIS COMPLETE!")
+    print("\n🎯 RANDOM FRAMES TRACKING ANALYSIS COMPLETE!")
     print("="*60)
-    print("The system now tracks players by team (Team 1 vs Team 2) instead of individual IDs.")
-    print("Players are assigned to teams based on jersey color and position.")
+    print("The system has analyzed 100 random frames from the full match.")
     print("Check the output video to see the team-based tracking performance.")
     print("Use the quality report above to identify areas for improvement.")
-    print("\nExiting after team tracking analysis...")
+    print("\nExiting after random frames analysis...") 
