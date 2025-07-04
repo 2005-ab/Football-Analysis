@@ -289,13 +289,13 @@ class Tracker:
                 track_id = int(det[4])
                 class_id_int = inv.get(class_id, -1) if isinstance(class_id, str) else int(class_id)
                 cls = names[class_id_int].lower()
-
+                
                 if cls == "player":
                     cx = int((bbox[0] + bbox[2]) / 2)
                     cy = int((bbox[1] + bbox[3]) / 2)
                     if self.is_inside_pitch((cx, cy), self.pitch_polygon):
                         player_info = {
-                            'bbox': bbox,
+                        'bbox': bbox,
                             'confidence': det[2],
                             'team': None
                         }
@@ -411,7 +411,7 @@ class Tracker:
         
         for frame_idx, frame in enumerate(frames):
             img = frame.copy()
-            
+
             # Draw team 1 players with jersey colors
             if frame_idx < len(tracks['team1_players']):
                 for track_id, info in tracks['team1_players'][frame_idx].items():
@@ -448,8 +448,8 @@ class Tracker:
                     # Draw team label
                     confidence_text = f"{info['confidence']:.2f}" if 'confidence' in info else "N/A"
                     cv2.putText(img, f"Team 2 ({confidence_text})", (x1, y1-10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
             # Draw ball
             if frame_idx < len(tracks['ball']) and tracks['ball'][frame_idx]:
                 for _, ball_info in tracks['ball'][frame_idx].items():

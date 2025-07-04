@@ -53,7 +53,7 @@ def save_video(frames, output_path, fps=24):
 if __name__ == "__main__":
     video_path = "clips/spurs_build_up/spurs_clip04.mp4"
     model_path = "models/best4.pt"
-    output_path = "output_videos/team_tracking.avi"
+    output_path = "output_videos/team_tracking_ellipse.avi"
     cache_path = None
     
     # For testing, limit frames to first 100
@@ -70,15 +70,16 @@ if __name__ == "__main__":
     print("\n🔄 Initializing team tracker...")
     tracker = Tracker(model_path)
     
-    print("🔄 Running team-based object tracking...")
+    print("🔄 Running object tracking...")
     tracks = tracker.get_object_tracks(frames, stub_path=cache_path)
 
-    print("\n🔄 Drawing team tracking annotations...")
+    # Use the draw_annotations method from Tracker
+    print("🔄 Drawing tracking annotations...")
     annotated = tracker.draw_annotations(frames, tracks)
 
-    print("🔄 Saving team tracking video...")
+    print("🔄 Saving tracking video...")
     save_video(annotated, output_path)
-    print(f"✅ Saved team tracking video to: {output_path}")
+    print(f"✅ Saved to {output_path}")
 
     # Generate and display tracking quality report
     print("\n" + "="*60)

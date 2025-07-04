@@ -6,7 +6,9 @@ from collections import defaultdict
 import pickle
 import os
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import KMeans
 import cv2
+from team_assigner.team_assigner import TeamAssigner
 
 
 class YOLOv8Tracker:
@@ -34,6 +36,8 @@ class YOLOv8Tracker:
         # Appearance features for re-identification
         self.appearance_features = {}
         self.feature_history = defaultdict(list)
+        
+        self.team_assigner = TeamAssigner()
         
     def extract_appearance_feature(self, frame, bbox):
         """Extract simple color histogram as appearance feature"""
@@ -169,6 +173,16 @@ class YOLOv8Tracker:
         w, h = x2 - x1, y2 - y1
         return [cx - w/2, cy - h/2, cx + w/2, cy + h/2]
     
+    def extract_jersey_color(self, frame, bbox):
+        x1, y1, x2, y2 = map(int, bbox)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return np.array([0, 0, 0])
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        crop = crop.reshape(-1, 3)
+        median_color = np.median(crop, axis=0)
+        return median_color
+    
     def update_tracks(self, detections, frame):
         """Update tracks with new detections"""
         # Predict next positions
@@ -199,6 +213,10 @@ class YOLOv8Tracker:
                 # Keep only recent features
                 if len(self.feature_history[track_id]) > 10:
                     self.feature_history[track_id] = self.feature_history[track_id][-10:]
+            # Store jersey color on first confirmation
+            if track['hits'] == self.min_hits and 'jersey_color' not in track:
+                jersey_color = self.extract_jersey_color(frame, det['bbox'])
+                track['jersey_color'] = jersey_color
         
         # Create new tracks for unmatched detections
         for det_idx in unmatched_detections:
@@ -246,6 +264,23 @@ class YOLOv8Tracker:
             if track_id in self.feature_history:
                 del self.feature_history[track_id]
     
+    def assign_teams(self):
+        # Gather jersey colors from confirmed tracks
+        jersey_colors = []
+        track_ids = []
+        for track_id, track in self.tracks.items():
+            if 'jersey_color' in track:
+                jersey_colors.append(track['jersey_color'])
+                track_ids.append(track_id)
+        if len(jersey_colors) < 2:
+            print('Not enough tracks for team clustering!')
+            return {}
+        jersey_colors = np.array(jersey_colors)
+        kmeans = KMeans(n_clusters=2, random_state=42).fit(jersey_colors)
+        labels = kmeans.labels_
+        team_assignment = {track_ids[i]: int(labels[i]) for i in range(len(track_ids))}
+        return team_assignment
+    
     def detect_and_track(self, frames, stub_path=None):
         """Main detection and tracking pipeline"""
         if stub_path and os.path.exists(stub_path):
@@ -288,12 +323,17 @@ class YOLOv8Tracker:
             
             # Prepare output
             current_players = {}
+            # Assign team colors using TeamAssigner
+            self.team_assigner.assign_team_color(frame, self.tracks)
             for track_id, track in self.tracks.items():
                 if track['hits'] >= self.min_hits:  # Only confirmed tracks
+                    team = self.team_assigner.get_player_team(frame, track['bbox'], track_id)
                     current_players[track_id] = {
                         'bbox': track['bbox'],
                         'confidence': track['confidence'],
-                        'age': track['age']
+                        'age': track['age'],
+                        'jersey_color': track.get('jersey_color', [0,0,0]),
+                        'team': team if team is not None else 0
                     }
             
             # Handle ball tracking (simpler approach)

@@ -15,11 +15,25 @@ class TeamAssigner:
         # Reshape the image to 2D array
         image_2d = image.reshape(-1, 3)
 
-        # Perform K-means with 2 clusters
-        kmeans = KMeans(n_clusters=2, init="k-means++", n_init=1)
-        kmeans.fit(image_2d)
+        # Check if we have enough distinct colors
+        unique_colors = np.unique(image_2d, axis=0)
+        if len(unique_colors) < 2:
+            # Not enough distinct colors, return None
+            return None
 
-        return kmeans
+        # Perform K-means with 2 clusters
+        try:
+            kmeans = KMeans(n_clusters=2, init="k-means++", n_init=1, random_state=42)
+            kmeans.fit(image_2d)
+            
+            # Check if clustering actually found 2 distinct clusters
+            if len(np.unique(kmeans.labels_)) < 2:
+                return None
+                
+            return kmeans
+        except Exception as e:
+            print(f"Clustering error: {e}")
+            return None
 
     def get_player_color(self, frame, bbox):
         try:
@@ -32,6 +46,10 @@ class TeamAssigner:
 
             # Get Clustering model
             kmeans = self.get_clustering_model(top_half_image)
+            
+            if kmeans is None:
+                # Fallback to median color if clustering fails
+                return np.median(top_half_image.reshape(-1, 3), axis=0)
 
             # Get the cluster labels for each pixel
             labels = kmeans.labels_
@@ -71,9 +89,60 @@ class TeamAssigner:
         
         player_colors = np.array(player_colors)
         
+        # Check if we have enough distinct colors for clustering
+        unique_colors = np.unique(player_colors, axis=0)
+        if len(unique_colors) < 2:
+            print("Warning: Not enough distinct colors for team clustering")
+            return
+        
         # Perform K-means clustering
-        kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10)
-        kmeans.fit(player_colors)
+        try:
+            kmeans = KMeans(n_clusters=2, init="k-means++", n_init=10, random_state=42)
+            kmeans.fit(player_colors)
+            
+            # Check if clustering actually found 2 distinct clusters
+            if len(np.unique(kmeans.labels_)) < 2:
+                print("Warning: Clustering found only one team, using fallback assignment")
+                # Assign teams based on color similarity to first two colors
+                first_color = player_colors[0]
+                second_color = None
+                for color in player_colors[1:]:
+                    if np.linalg.norm(color - first_color) > 30:  # Threshold for color difference
+                        second_color = color
+                        break
+                
+                if second_color is None:
+                    print("Warning: All colors too similar, cannot assign teams")
+                    return
+                
+                # Simple assignment based on distance to first two colors
+                labels = []
+                for color in player_colors:
+                    dist1 = np.linalg.norm(color - first_color)
+                    dist2 = np.linalg.norm(color - second_color)
+                    labels.append(0 if dist1 < dist2 else 1)
+                
+                # Create a simple clustering result
+                class SimpleKMeans:
+                    def __init__(self, labels, centers):
+                        self.labels_ = np.array(labels)
+                        self.cluster_centers_ = centers
+                    
+                    def predict(self, X):
+                        predictions = []
+                        for x in X:
+                            dist1 = np.linalg.norm(x - self.cluster_centers_[0])
+                            dist2 = np.linalg.norm(x - self.cluster_centers_[1])
+                            predictions.append(0 if dist1 < dist2 else 1)
+                        return np.array(predictions)
+                
+                kmeans = SimpleKMeans(labels, [first_color, second_color])
+            else:
+                print(f"Successfully clustered {len(player_colors)} players into 2 teams")
+
+        except Exception as e:
+            print(f"Clustering error: {e}")
+            return
 
         self.kmeans = kmeans
 
